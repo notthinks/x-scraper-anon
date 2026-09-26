@@ -1,0 +1,53 @@
+{
+  "name": "x-scraper-no-api",
+  "version": "1.0.0",
+  "description": "Free, self-hosted X (Twitter) scraper with no API key. Uses your own browser session via Playwright, exports LLM-ready JSON/CSV/Markdown. Ships an agent Skill for OpenClaw, Hermes and other AI agents. Not affiliated with X Corp.",
+  "keywords": [
+    "twitter-scraper",
+    "x-scraper",
+    "twitter",
+    "x",
+    "no-api",
+    "scraper",
+    "playwright",
+    "ai-agent",
+    "openclaw",
+    "hermes",
+    "llm-data",
+    "social-media-scraping",
+    "tweet-scraper",
+    "mcp"
+  ],
+  "type": "module",
+  "bin": {
+    "xscraper": "src/cli.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "setup": "playwright install chromium",
+    "start": "node src/cli.js --help",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "playwright": "^1.49.0"
+  },
+  "license": "MIT",
+  "author": "JoinArtisanVent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JoinArtisanVent/x-scraper-no-api.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JoinArtisanVent/x-scraper-no-api/issues"
+  },
+  "homepage": "https://github.com/JoinArtisanVent/x-scraper-no-api#readme",
+  "files": [
+    "src/",
+    "skills/",
+    "README.md",
+    "LICENSE"
+  ]
+}
