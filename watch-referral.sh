@@ -70,19 +70,21 @@ for t in data.get("tweets", []):
     urls = [u for u in (t.get("links") or []) if "referral" in u.lower()]
     if not urls:
         urls = extract_urls(t.get("text") or "")
-    new.append({"id": tid, "source": t.get("url", ""), "urls": urls})
+    new.append({"id": tid, "source": t.get("url", ""), "date": t.get("date") or "", "datetime": t.get("datetime") or "", "urls": urls})
 
 if not new:
-    sys.exit(0)   # watchdog: tidak ada output = tidak ada notifikasi
+    sys.exit(0)  # watchdog: tidak ada output = tidak ada notifikasi
 
 lines = []
 with open(state_path, "a") as fh:
     for item in new:
         fh.write(f"{item['id']}\n")
-        # Hanya URL: URL yang ditemukan + URL sumber tweet-nya.
+        # Tanggal posting (kalau terbaca) + URL yang ditemukan + URL sumber.
+        when = item["datetime"] or item["date"]
+        head = f"[{when}] " if when else ""
         for u in item["urls"]:
-            lines.append(u)
-        lines.append(item["source"])
+            lines.append(head + u)
+        lines.append(head + item["source"])
         lines.append("")
 
 print("\n".join(lines).rstrip())

@@ -99,6 +99,23 @@ async function fetchTweet(page, id) {
       }
       const text = lines.slice(0, end).join('\n');
 
+      // Tanggal/waktu posting: baris berformat "6:16 AM · Dec 17, 2025" atau
+      // "11:40 AM · Mar 21, 2026". Tahun hilang kalau tweet dari tahun berjalan
+      // ("8:46 PM · Jul 3") — itu memang perilaku X untuk tweet terkini.
+      let datetime = null;
+      let dateShort = null;
+      for (const l of lines) {
+        const dm = l.match(/^(\d{1,2}:\d{2}\s*(?:AM|PM))\s*·\s*([A-Z][a-z]{2}\s+\d{1,2}(?:,\s*\d{4})?)$/i);
+        if (dm) { datetime = dm[1] + ' · ' + dm[2]; dateShort = dm[2]; break; }
+      }
+      if (!datetime) {
+        // pola tanpa jam: "Dec 17, 2025"
+        for (const l of lines) {
+          const dm = l.match(/^([A-Z][a-z]{2}\s+\d{1,2}(?:,\s*\d{4})?)$/);
+          if (dm) { datetime = dm[1]; dateShort = dm[1]; break; }
+        }
+      }
+
       // URL LENGKAP ada di atribut href <a>, bukan di teksnya.
       // X memangkas tampilan jadi "claude.ai/referral/SE-Ja…", tetapi href
       // menyimpan target utuh. Ambil tautan non-X / non-t.co.
@@ -109,7 +126,7 @@ async function fetchTweet(page, id) {
           if (!links.includes(raw)) links.push(raw);
         }
       }
-      return { username: m[1], name: name0, text, links };
+      return { username: m[1], name: name0, text, links, datetime, dateShort };
     }
     return null;
   }, id);
@@ -121,6 +138,8 @@ async function fetchTweet(page, id) {
     username: data.username,
     name: data.name,
     text: data.text,
+    date: data.dateShort || null,
+    datetime: data.datetime || null,
     links: data.links,
     metrics: {},
   };
