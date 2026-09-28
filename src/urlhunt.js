@@ -33,9 +33,9 @@ function parseArgs(argv) {
 /** Ambil semua link status X dari sebuah search engine. */
 async function findStatusLinks(page, engine, query) {
   const urls = {
-    brave: `https://search.brave.com/search?q=${encodeURIComponent('"' + query + '"')}`,
-    bing: `https://www.bing.com/search?q=${encodeURIComponent('"' + query + '" site:x.com')}`,
-    ddg: `https://html.duckduckgo.com/html/?q=${encodeURIComponent('"' + query + '" x.com')}`,
+    brave: `https://search.brave.com/search?q=${encodeURIComponent(query)}`,
+    bing: `https://www.bing.com/search?q=${encodeURIComponent(query)}`,
+    ddg: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
   };
   await page.goto(urls[engine], { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForTimeout(4500);
@@ -54,24 +54,29 @@ async function findStatusLinks(page, engine, query) {
  * Satu varian saja biasanya hanya memberi 1-2 hasil.
  */
 async function harvestCandidates(page, query) {
+  // Jangan pakai tanda kutip: query berkutip menuntut frasa persis dan
+  // menolak halaman yang memuat URL di dalam kartu tautan (kasus umum X).
+  // Beberapa varian + dua mesin pencari supaya tidak bergantung satu sumber.
   const variants = [
-    `"${query}"`,
-    `"${query}" site:x.com`,
-    `"${query}" site:twitter.com`,
-    `${query} claude referral`,
+    ['brave', `${query} x.com`],
+    ['brave', `${query} site:x.com`],
+    ['brave', `${query} claude referral code`],
+    ['ddg', `${query} x.com`],
+    ['bing', `${query} x.com`],
   ];
   const found = new Map();
   const absorb = (list) => { for (const it of list) if (!found.has(it.id)) found.set(it.id, it); };
 
-  for (const v of variants) {
+  for (const [engine, v] of variants) {
     try {
-      absorb(await findStatusLinks(page, 'brave', v));
-      console.error(`[urlhunt] varian "${v.slice(0, 34)}" -> total ${found.size}`);
+      absorb(await findStatusLinks(page, engine, v));
+      console.error(`[urlhunt] ${engine} "${v.slice(0, 30)}" -> total ${found.size}`);
     } catch (e) {
-      console.error(`[urlhunt] varian gagal: ${e.message}`);
+      console.error(`[urlhunt] ${engine} gagal: ${e.message.slice(0, 50)}`);
     }
-    // jeda sopan supaya tidak kena rate-limit Brave
-    await page.waitForTimeout(2500);
+    // berhenti lebih awal kalau sudah cukup banyak kandidat
+    if (found.size >= 25) break;
+    await page.waitForTimeout(2000);
   }
   return [...found.values()];
 }
