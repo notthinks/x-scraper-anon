@@ -49,22 +49,47 @@ async function findStatusLinks(page, engine, query) {
   return [...found.values()];
 }
 
-/** Ambil teks + metrik satu tweet lewat halaman statusnya. */
+/**
+ * Kumpulkan kandidat dari beberapa varian query Brave + paginasi.
+ * Satu varian saja biasanya hanya memberi 1-2 hasil.
+ */
+async function harvestCandidates(page, query) {
+  const variants = [
+    `"${query}"`,
+    `"${query}" site:x.com`,
+    `"${query}" site:twitter.com`,
+    `${query} claude referral`,
+  ];
+  const found = new Map();
+  const absorb = (list) => { for (const it of list) if (!found.has(it.id)) found.set(it.id, it); };
+
+  for (const v of variants) {
+    try {
+      absorb(await findStatusLinks(page, 'brave', v));
+      console.error(`[urlhunt] varian "${v.slice(0, 34)}" -> total ${found.size}`);
+    } catch (e) {
+      console.error(`[urlhunt] varian gagal: ${e.message}`);
+    }
+    // jeda sopan supaya tidak kena rate-limit Brave
+    await page.waitForTimeout(2500);
+  }
+  return [...found.values()];
+}
+
+/** Ambil teks + tautan LENGKAP + metrik satu tweet lewat halaman statusnya. */
 async function fetchTweet(page, id) {
   await page.goto(`https://x.com/i/status/${id}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(6000);
+
   const data = await page.evaluate((tid) => {
-    // artikel pertama = tweet utama (id-nya cocok dengan yang diminta)
     for (const art of document.querySelectorAll('article')) {
       const link = art.querySelector('a[href*="/status/"]');
-      if (!link) continue;
-      const href = link.getAttribute('href') || '';
-      const m = href.match(/^\/([^/]+)\/status\/(\d+)/);
+      const m = (link?.getAttribute('href') || '').match(/^\/([^/]+)\/status\/(\d+)/);
       if (!m || m[2] !== tid) continue;
+
       const lines = art.innerText.split('\n').map((l) => l.trim()).filter(Boolean);
-      // Anonim: satu <article> bisa memuat tweet utama + preview tweet lain
-      // (quote/reply) yang ditempelkan setelahnya. Tweet utama berakhir ketika
-      // nama tampilan penulis muncul lagi untuk kedua kalinya.
+      // Satu <article> bisa memuat tweet utama + preview tweet lain; potong
+      // saat nama tampilan penulis muncul lagi.
       const name0 = lines[0] || null;
       let end = lines.length;
       if (name0) {
@@ -72,59 +97,33 @@ async function fetchTweet(page, id) {
           if (lines[k] === name0) { end = k; break; }
         }
       }
-      const own = lines.slice(0, end);
+      const text = lines.slice(0, end).join('\n');
 
-      // Metrik bisa muncul setelah tweet selesai (mis. "8:50 AM · Jan 21, 2026
-      // · 11.2K Views") atau sebagai angka telanjang di ekor. Ambil dari baris
-      // mentah (bukan `own`) supaya metrik yang berada di luar blok tetap kebaca.
-      const expand = (s) => { const mm = String(s).match(/^([\d.,]+)\s*([KMB])?$/i); if (!mm) return undefined; let n = parseFloat(mm[1].replace(/,/g, '')); const u = (mm[2] || '').toUpperCase(); if (u === 'K') n *= 1e3; else if (u === 'M') n *= 1e6; else if (u === 'B') n *= 1e9; return Math.round(n); };
-      const isNum = (s) => expand(s) !== undefined;
-      const metrics = {};
-      // pola eksplisit: "11.2K Views"
-      const joined = lines.join(' | ');
-      const vw = joined.match(/([\d.,]+\s*[KMB]?)\s*Views/i);
-      if (vw) metrics.views = expand(vw[1].replace(/\s+/g, ''));
-      // tiga angka sebelum Views = replies, reposts, likes
-      const seq = joined.match(/([\d.,]+\s*[KMB]?)\s*\|\s*([\d.,]+\s*[KMB]?)\s*\|\s*([\d.,]+\s*[KMB]?)\s*\|\s*[\d.,]+\s*[KMB]?\s*Views/i);
-      if (seq) {
-        metrics.replies = expand(seq[1].replace(/\s+/g, ''));
-        metrics.reposts = expand(seq[2].replace(/\s+/g, ''));
-        metrics.likes = expand(seq[3].replace(/\s+/g, ''));
-      } else {
-        const tail = [];
-        for (let j = own.length - 1; j >= 0 && tail.length < 4; j--) {
-          if (isNum(own[j])) tail.unshift(own[j]); else break;
+      // URL LENGKAP ada di atribut href <a>, bukan di teksnya.
+      // X memangkas tampilan jadi "claude.ai/referral/SE-Ja…", tetapi href
+      // menyimpan target utuh. Ambil tautan non-X / non-t.co.
+      const links = [];
+      for (const a of art.querySelectorAll('a[href]')) {
+        const raw = a.getAttribute('href') || '';
+        if (/^https?:\/\//.test(raw) && !/^(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:x|twitter)\.com\//i.test(raw) && !raw.includes('t.co/')) {
+          if (!links.includes(raw)) links.push(raw);
         }
-        if (tail[0]) metrics.replies = expand(tail[0]);
-        if (tail[1]) metrics.reposts = expand(tail[1]);
-        if (tail[2]) metrics.likes = expand(tail[2]);
-        if (tail[3]) metrics.views = expand(tail[3]);
       }
-
-      const idx = own[1] && own[1].startsWith('@') ? 2 : 1;
-      let ci = idx;
-      if (own[ci] && /^(\d+[mhd]|[A-Z][a-z]{2}\s+\d{1,2}(,\s+\d{4})?|\d{1,2}:\d{2}\s*(AM|PM))/.test(own[ci])) ci++;
-      // teks = setelah tanggal, sampai sebelum ekor angka (kalau ada di dalam `own`)
-      let endOwn = own.length;
-      const tailIn = [];
-      for (let j = own.length - 1; j >= ci && tailIn.length < 3; j--) {
-        if (isNum(own[j])) tailIn.unshift(own[j]); else break;
-      }
-      if (tailIn.length === 3) endOwn = own.length - 3;
-      const text = own.slice(ci, endOwn).join('\n').trim();
-      return {
-        id: tid,
-        url: `https://x.com/${m[1]}/status/${tid}`,
-        username: m[1],
-        name: name0,
-        date: own[ci - 1] || null,
-        text,
-        metrics,
-      };
+      return { username: m[1], name: name0, text, links };
     }
     return null;
   }, id);
-  return data;
+
+  if (!data) return null;
+  return {
+    id,
+    url: `https://x.com/${data.username}/status/${id}`,
+    username: data.username,
+    name: data.name,
+    text: data.text,
+    links: data.links,
+    metrics: {},
+  };
 }
 
 async function main() {
@@ -144,21 +143,28 @@ async function main() {
   const page = ctx.pages()[0] || (await ctx.newPage());
 
   console.error(`[urlhunt] mencari "${args.query}"…`);
-  const hits = await findStatusLinks(page, 'brave', args.query);
-  console.error(`[urlhunt] ${hits.length} kandidat status ditemukan via Brave`);
+  const hits = await harvestCandidates(page, args.query);
+  console.error(`[urlhunt] ${hits.length} kandidat status ditemukan`);
 
   const results = [];
   for (const h of hits.slice(0, args.limit)) {
     try {
       const t = await fetchTweet(page, h.id);
       if (t) {
-        // hanya simpan kalau teksnya benar-benar mengandung token yang dicari
+        // Cocokkan token yang dicari terhadap teks DAN tautan lengkap.
+        // Tautan adalah sumber utama karena teks tampilan dipangkas X.
         const needle = args.query.toLowerCase();
+        const bare = needle.replace(/^https?:\/\//, '');
         const hay = (t.text || '').toLowerCase();
-        const matched = hay.includes(needle) || hay.includes(needle.replace(/^https?:\/\//, ''));
+        const linkHay = (t.links || []).map((u) => u.toLowerCase()).join(' ');
+        const matched =
+          hay.includes(needle) || hay.includes(bare) ||
+          linkHay.includes(needle) || linkHay.includes(bare) ||
+          // token pendek (mis. "gvQw"): cek juga potongan terakhir URL
+          (t.links || []).some((u) => u.toLowerCase().includes(needle.split('/').pop()));
         t.matches_query = matched;
         results.push(t);
-        console.error(`[urlhunt] ${t.username} (${t.date}) match=${matched} likes=${t.metrics.likes ?? '-'}`);
+        console.error(`[urlhunt] ${t.username} match=${matched} links=${(t.links || []).length}`);
       }
     } catch (e) {
       console.error(`[urlhunt] gagal ${h.id}: ${e.message}`);

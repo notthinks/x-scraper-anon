@@ -66,7 +66,10 @@ for t in data.get("tweets", []):
     tid = str(t.get("id") or "")
     if not tid or tid in seen:
         continue
-    urls = extract_urls(t.get("text") or "")
+    # Utamakan URL dari atribut href (utuh). Fallback ke regex teks kalau kosong.
+    urls = [u for u in (t.get("links") or []) if "referral" in u.lower()]
+    if not urls:
+        urls = extract_urls(t.get("text") or "")
     new.append({"id": tid, "source": t.get("url", ""), "urls": urls})
 
 if not new:
