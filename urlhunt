@@ -2,13 +2,20 @@
 # urlhunt — cari postingan X terbaru yang mengandung URL/token tertentu.
 #
 # Kenapa tidak pakai search X langsung: x.com/search me-redirect ke halaman
-# login untuk pengunjung anonim. Kita pakai Brave Search (masih mengindeks
-# status X publik) untuk menemukan ID tweet, lalu ambil isinya via DOM.
+# login untuk pengunjung anonim. Kita pakai search engine publik (masih
+# mengindeks status X) untuk menemukan ID tweet, lalu ambil isinya via DOM.
+#
+# Mode default AGRESIF: beberapa tab paralel, paginasi, rotasi profil.
+# Pakai --calm untuk mode konservatif (1 tab, tanpa paginasi).
 #
 # Pemakaian:
-#   urlhunt "claude.ai/referral"
-#   urlhunt "claude.ai/referral/gvQw" --limit 10
-#   urlhunt "openai.com" --out hasil.json
+# urlhunt "claude.ai/referral"
+# urlhunt "claude.ai/referral" --limit 80 --tabs 6 --pages 3
+# urlhunt "claude.ai/referral" --calm
+# urlhunt "openai.com" --out hasil.json
+#
+# Catatan: jangan dijalankan bertubi-tubi. Mesin pencari akan membalas
+# 429 (Brave) atau 202 (DuckDuckGo) dan hasil jadi kosong sampai cooldown.
 set -euo pipefail
 
 REPO="$HOME/x-scraper-no-api"
