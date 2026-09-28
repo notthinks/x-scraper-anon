@@ -37,6 +37,7 @@ function parseArgs(argv) {
     else if (a === '--tabs') out.tabs = Math.max(1, Math.min(8, parseInt(argv[++i], 10) || 5));
     else if (a === '--pages') out.pages = Math.max(1, Math.min(5, parseInt(argv[++i], 10) || 3));
     else if (a === '--max') out.maxCandidates = parseInt(argv[++i], 10) || 400;
+    else if (a === '--proxy') out.proxy = argv[++i];
     else if (a === '--calm') { out.calm = true; out.tabs = 1; out.pages = 1; out.limit = 25; }
     else if (!out.query) out.query = a;
   }
@@ -95,17 +96,30 @@ async function findStatusLinks(page, engine, query, pageNo) {
 }
 
 /** Buka konteks dengan profil ke-N (rotasi kalau kena blokir). */
-async function openProfile(slot) {
+async function openProfile(slot, proxyUrl) {
   const dir = slot === 0
     ? profileDir
     : `${profileDir}-r${slot}`;
   fs.mkdirSync(dir, { recursive: true });
-  const ctx = await chromium.launchPersistentContext(dir, {
+
+  const opts = {
     headless: false,
     viewport: { width: 1280, height: 2000 },
     userAgent: UA,
     args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
-  });
+  };
+
+  // Proxy: dipakai kalau diberikan. Format http://user:pass@host:port
+  if (proxyUrl) {
+    const u = new URL(proxyUrl);
+    opts.proxy = {
+      server: `${u.protocol}//${u.host}`,
+      username: decodeURIComponent(u.username),
+      password: decodeURIComponent(u.password),
+    };
+  }
+
+  const ctx = await chromium.launchPersistentContext(dir, opts);
   await ctx.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
   return ctx;
 }
@@ -264,11 +278,29 @@ async function main() {
     process.exit(1);
   }
 
-  const ctx = await openProfile(0);
+  // Proxy dari --proxy, atau dari env URLHUNT_PROXY / WEBSHARE_PROXY.
+  const proxyUrl = args.proxy || process.env.URLHUNT_PROXY || process.env.WEBSHARE_PROXY || '';
+
+  // Proxy residensial (webshare) hanya stabil dengan sedikit koneksi
+  // bersamaan: membuka banyak tab sekaligus membuat navigasi gagal
+  // (ERR_SSL_PROTOCOL_ERROR / ERR_CONNECTION_CLOSED / ERR_ABORTED).
+  // Kalau lewat proxy: paksa 1 tab, kurangi halaman.
+  if (proxyUrl) {
+    if (args.tabs > 1) {
+      console.error(`[urlhunt] proxy aktif, tabs diturunkan ${args.tabs} -> 1`);
+      args.tabs = 1;
+    }
+    if (args.pages > 2) {
+      console.error(`[urlhunt] proxy aktif, pages diturunkan ${args.pages} -> 2`);
+      args.pages = 2;
+    }
+  }
+
+  const ctx = await openProfile(0, proxyUrl);
 
   const searchPage = ctx.pages()[0] || (await ctx.newPage());
 
-  console.error(`[urlhunt] mode=${args.calm ? 'kalem' : 'AGRESIF'} tabs=${args.tabs} pages=${args.pages} limit=${args.limit}`);
+  console.error(`[urlhunt] mode=${args.calm ? 'kalem' : 'AGRESIF'} tabs=${args.tabs} pages=${args.pages} limit=${args.limit} proxy=${proxyUrl ? 'ON' : 'off'}`);
   console.error(`[urlhunt] mencari "${args.query}"…`);
   let hits = await harvestCandidates(searchPage, args);
   console.error(`[urlhunt] ${hits.length} kandidat status ditemukan`);
@@ -280,7 +312,7 @@ async function main() {
   if (hits.length < 8 && !args.calm) {
     console.error(`[urlhunt] hasil tipis, coba profil kedua…`);
     try {
-      extraCtx = await openProfile(1);
+      extraCtx = await openProfile(1, proxyUrl);
       const p2 = extraCtx.pages()[0] || (await extraCtx.newPage());
       const hits2 = await harvestCandidates(p2, { ...args, pages: Math.max(1, args.pages - 1) });
       const seen = new Set(hits.map((h) => h.id));

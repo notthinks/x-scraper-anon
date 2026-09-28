@@ -12,20 +12,34 @@
 # urlhunt "claude.ai/referral"
 # urlhunt "claude.ai/referral" --limit 80 --tabs 6 --pages 3
 # urlhunt "claude.ai/referral" --calm
+# urlhunt "claude.ai/referral" --proxy "http://user:pass@host:80"
 # urlhunt "openai.com" --out hasil.json
+#
+# Proxy juga bisa lewat env: URLHUNT_PROXY atau WEBSHARE_PROXY.
 #
 # Catatan: jangan dijalankan bertubi-tubi. Mesin pencari akan membalas
 # 429 (Brave) atau 202 (DuckDuckGo) dan hasil jadi kosong sampai cooldown.
+# Kalau IP WARP diblokir, pakai proxy (--proxy / URLHUNT_PROXY).
 set -euo pipefail
 
 REPO="$HOME/x-scraper-no-api"
 
-# 1. WARP wajib (IP datacenter -> X 403)
-if ! warp-cli --accept-tos status 2>/dev/null | grep -q "Connected"; then
-  echo "[urlhunt] menyalakan WARP…" >&2
-  warp-cli --accept-tos mode warp >/dev/null 2>&1 || true
-  warp-cli --accept-tos connect >/dev/null 2>&1 || true
-  sleep 5
+# 0. Muat kredensial proxy (kalau ada). Proxy residensial dipakai untuk
+#    menembus blokir mesin pencari terhadap rentang IP WARP.
+if [ -f "$HOME/.xscraper/proxy.env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.xscraper/proxy.env"
+fi
+
+# 1. WARP wajib (IP datacenter -> X 403). Dilewati kalau pakai proxy,
+#    karena proxy sudah menggantikan peran WARP.
+if [ -z "${URLHUNT_PROXY:-}${WEBSHARE_PROXY:-}" ]; then
+  if ! warp-cli --accept-tos status 2>/dev/null | grep -q "Connected"; then
+    echo "[urlhunt] menyalakan WARP…" >&2
+    warp-cli --accept-tos mode warp >/dev/null 2>&1 || true
+    warp-cli --accept-tos connect >/dev/null 2>&1 || true
+    sleep 5
+  fi
 fi
 
 # 2. Chromium headful di Xvfb (headless -> body kosong)
