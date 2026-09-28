@@ -8,6 +8,7 @@
 
 import { openSession, assertLoggedIn } from './session.js';
 import { RateLimiter } from './ratelimit.js';
+import { extractTweetsFromDom } from './domfallback.js';
 
 /** Recursively collect every object that looks like a Tweet result. */
 function* walkTweets(node, seen = new Set()) {
@@ -120,23 +121,51 @@ export async function scrape({ url, limit = 50, maxScrolls = 40, profileDir, hea
   });
 
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+
+  // Mode anonim: X mengirim HTML server-side tetapi TIDAK mengirim respons
+  // GraphQL berisi tweet. assertLoggedIn() tetap dipanggil untuk memastikan
+  // kita bukan di halaman login blokir, lalu kita isi koleksi dari DOM.
+  let anonymousMode = false;
+  try {
   await assertLoggedIn(page);
+  } catch (err) {
+  throw err;
+  }
+  if (collected.size === 0) {
+  anonymousMode = true;
+  }
   await limiter.pause();
 
   let stagnantRounds = 0;
   for (let i = 0; i < maxScrolls && collected.size < limit; i++) {
-    const before = collected.size;
-    await page.mouse.wheel(0, 2500 + Math.random() * 1500);
-    await limiter.pause();
+  const before = collected.size;
 
-    if (collected.size === before) {
-      stagnantRounds += 1;
-      if (stagnantRounds >= 4) break; // timeline exhausted
-    } else {
-      stagnantRounds = 0;
-      limiter.resetBackoff();
-    }
-    if (!limiter.tick(0)) break;
+  // Fallback DOM: satu-satunya sumber tweet saat anonim.
+  if (anonymousMode) {
+  try {
+  const domTweets = await extractTweetsFromDom(page);
+  for (const t of domTweets) {
+  if (t.id && !collected.has(t.id)) {
+  collected.set(t.id, t);
+  onBatch?.([t]);
+  }
+  }
+  } catch {
+  /* DOM belum siap, coba lagi ronde berikutnya */
+  }
+  }
+
+  await page.mouse.wheel(0, 2500 + Math.random() * 1500);
+  await limiter.pause();
+
+  if (collected.size === before) {
+  stagnantRounds += 1;
+  if (stagnantRounds >= 4) break; // timeline exhausted
+  } else {
+  stagnantRounds = 0;
+  limiter.resetBackoff();
+  }
+  if (!limiter.tick(0)) break;
   }
 
   await context.close();

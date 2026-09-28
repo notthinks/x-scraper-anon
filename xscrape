@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# xscrape — wrapper untuk x-scraper-no-api di VM headless.
+#
+# Dua hal yang wajib supaya scraping jalan tanpa login:
+#   1. WARP aktif  -> IP datacenter tidak diblokir X (403).
+#   2. Xvfb        -> Chromium headful; X memblokir browser headless.
+#
+# Pemakaian:
+#   ./xscrape timeline @nasa --limit 20 --format md
+#   ./xscrape tweet 2103610284464316469 --format md
+#   ./xscrape search "from:NASA" --limit 10      (search butuh login)
+set -euo pipefail
+
+REPO="$HOME/x-scraper-no-api"
+
+# 1. Pastikan WARP aktif
+if ! warp-cli --accept-tos status 2>/dev/null | grep -q "Connected"; then
+  echo "[xscrape] WARP belum aktif, menyalakan…" >&2
+  warp-cli --accept-tos mode warp >/dev/null 2>&1 || true
+  warp-cli --accept-tos connect >/dev/null 2>&1 || true
+  sleep 5
+fi
+
+# 2. Jalankan Chromium headful di dalam virtual display
+exec xvfb-run -a --server-args="-screen 0 1280x2000x24" \
+  node "$REPO/src/cli.js" "$@" --headed
