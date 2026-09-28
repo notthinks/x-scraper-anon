@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# urlhunt — cari postingan X terbaru yang mengandung URL/token tertentu.
+#
+# Kenapa tidak pakai search X langsung: x.com/search me-redirect ke halaman
+# login untuk pengunjung anonim. Kita pakai Brave Search (masih mengindeks
+# status X publik) untuk menemukan ID tweet, lalu ambil isinya via DOM.
+#
+# Pemakaian:
+#   urlhunt "claude.ai/referral"
+#   urlhunt "claude.ai/referral/gvQw" --limit 10
+#   urlhunt "openai.com" --out hasil.json
+set -euo pipefail
+
+REPO="$HOME/x-scraper-no-api"
+
+# 1. WARP wajib (IP datacenter -> X 403)
+if ! warp-cli --accept-tos status 2>/dev/null | grep -q "Connected"; then
+  echo "[urlhunt] menyalakan WARP…" >&2
+  warp-cli --accept-tos mode warp >/dev/null 2>&1 || true
+  warp-cli --accept-tos connect >/dev/null 2>&1 || true
+  sleep 5
+fi
+
+# 2. Chromium headful di Xvfb (headless -> body kosong)
+exec xvfb-run -a --server-args="-screen 0 1280x2000x24" \
+  node "$REPO/src/urlhunt.js" "$@"
