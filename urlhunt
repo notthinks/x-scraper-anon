@@ -23,16 +23,60 @@
 set -euo pipefail
 
 REPO="$HOME/x-scraper-no-api"
+PROFILE="$HOME/.xscraper/browser-profile"
 
-# 0. Muat kredensial proxy (kalau ada). Proxy residensial dipakai untuk
-#    menembus blokir mesin pencari terhadap rentang IP WARP.
+# 0. Bersihkan sisa Chromium dari run sebelumnya.
+#
+# Ini WAJIB untuk pemakaian terjadwal: kalau satu run mati di tengah
+# (timeout, kill, crash), proses Chromium-nya tertinggal memegang profil.
+# Run berikutnya lalu gagal dengan "Opening in existing browser session"
+# dan scraper berhenti total tanpa terlihat seperti error.
+cleanup_stale() {
+  local killed=0
+  local pids
+  pids=$(pgrep -f "user-data-dir=${PROFILE}" 2>/dev/null || true)
+  if [ -n "$pids" ]; then
+    for p in $pids; do
+      kill -9 "$p" 2>/dev/null && killed=$((killed + 1))
+    done
+  fi
+  # Kunci profil hanya aman dihapus kalau tidak ada proses yang hidup.
+  if [ "$(pgrep -f "user-data-dir=${PROFILE}" 2>/dev/null | wc -l)" -eq 0 ]; then
+    rm -f "$PROFILE"/Singleton* 2>/dev/null || true
+  fi
+  if [ "$killed" -gt 0 ]; then
+    echo "[urlhunt] membersihkan $killed proses Chromium nyangkut" >&2
+    sleep 1
+  fi
+}
+cleanup_stale
+
+# 1. Muat kredensial proxy (kalau ada). Proxy residensial dipakai untuk
+# menembus blokir mesin pencari terhadap rentang IP WARP.
 if [ -f "$HOME/.xscraper/proxy.env" ]; then
-  # shellcheck disable=SC1091
-  . "$HOME/.xscraper/proxy.env"
+ # shellcheck disable=SC1091
+ . "$HOME/.xscraper/proxy.env"
 fi
 
-# 1. WARP wajib (IP datacenter -> X 403). Dilewati kalau pakai proxy,
-#    karena proxy sudah menggantikan peran WARP.
+# 2. Kalau proxy dikonfigurasi, cek dulu masih hidup.
+#
+# Proxy residensial punya kuota bandwidth. Kalau habis, webshare membalas
+# HTTP 402 "Bandwidth limit reached" dan SEMUA navigasi gagal. Tanpa cek
+# ini, scraper tampak "tidak ada hasil" padahal sebenarnya mati total.
+if [ -n "${URLHUNT_PROXY:-}${WEBSHARE_PROXY:-}" ]; then
+  PURL="${URLHUNT_PROXY:-$WEBSHARE_PROXY}"
+  CODE=$(timeout 20 curl -s -x "$PURL" -o /dev/null -w "%{http_code}" \
+    https://api.ipify.org 2>/dev/null) || CODE="000"
+  if [ "$CODE" != "200" ]; then
+    echo "[urlhunt] PERINGATAN: proxy balas HTTP $CODE (bukan 200)." >&2
+    echo "[urlhunt] Kalau 402: kuota bandwidth proxy habis -> perbarui/tambah kuota." >&2
+    echo "[urlhunt] Melepas proxy, kembali ke WARP untuk run ini." >&2
+    unset URLHUNT_PROXY WEBSHARE_PROXY
+  fi
+fi
+
+# 3. WARP wajib (IP datacenter -> X 403). Dilewati kalau pakai proxy,
+# karena proxy sudah menggantikan peran WARP.
 if [ -z "${URLHUNT_PROXY:-}${WEBSHARE_PROXY:-}" ]; then
   if ! warp-cli --accept-tos status 2>/dev/null | grep -q "Connected"; then
     echo "[urlhunt] menyalakan WARP…" >&2
@@ -42,6 +86,6 @@ if [ -z "${URLHUNT_PROXY:-}${WEBSHARE_PROXY:-}" ]; then
   fi
 fi
 
-# 2. Chromium headful di Xvfb (headless -> body kosong)
+# 4. Chromium headful di Xvfb (headless -> body kosong)
 exec xvfb-run -a --server-args="-screen 0 1280x2000x24" \
   node "$REPO/src/urlhunt.js" "$@"
