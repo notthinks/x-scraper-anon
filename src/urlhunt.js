@@ -329,11 +329,26 @@ async function main() {
   const results = [];
   const tabCount = Math.min(args.tabs, todo.length) || 1;
 
-  // buat worker tab
+  // buat worker tab — kalau gagal (tab terlalu banyak / ctx sudah penuh),
+  // kurangi jumlah tab dan coba lagi alih-alih mati total.
   const workers = [];
-  for (let i = 0; i < tabCount; i++) {
-    const w = await grab.newPage();
-    workers.push(w);
+  let wanted = tabCount;
+  while (wanted > 0) {
+    try {
+      for (let i = workers.length; i < wanted; i++) {
+        workers.push(await grab.newPage());
+      }
+      break;
+    } catch (e) {
+      console.error(`[urlhunt] gagal buka tab ke-${workers.length + 1}: ${e.message.slice(0, 60)}`);
+      wanted = workers.length; // pakai tab yang sudah berhasil saja
+      if (wanted === 0) break;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+  if (workers.length === 0) {
+    console.error('[urlhunt] tidak bisa membuka tab verifikasi, pakai tab utama');
+    workers.push(page);
   }
 
   let idx = 0;

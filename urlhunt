@@ -9,18 +9,22 @@
 # Pakai --calm untuk mode konservatif (1 tab, tanpa paginasi).
 #
 # Pemakaian:
-# urlhunt "claude.ai/referral"
-# urlhunt "claude.ai/referral" --limit 80 --tabs 6 --pages 3
-# urlhunt "claude.ai/referral" --calm
-# urlhunt "claude.ai/referral" --proxy "http://user:pass@host:80"
-# urlhunt "openai.com" --out hasil.json
+#   urlhunt "claude.ai/referral"
+#   urlhunt "claude.ai/referral" --limit 80 --tabs 6 --pages 3
+#   urlhunt "claude.ai/referral" --calm
+#   urlhunt "claude.ai/referral" --proxy "http://user:pass@host:80"
+#   urlhunt "openai.com" --out hasil.json
 #
 # Proxy juga bisa lewat env: URLHUNT_PROXY atau WEBSHARE_PROXY.
 #
-# Catatan: jangan dijalankan bertubi-tubi. Mesin pencari akan membalas
-# 429 (Brave) atau 202 (DuckDuckGo) dan hasil jadi kosong sampai cooldown.
-# Kalau IP WARP diblokir, pakai proxy (--proxy / URLHUNT_PROXY).
-set -euo pipefail
+# JALUR JARINGAN (urut prioritas):
+#   1. Proxy residensial, kalau ada dan sehat (cek HTTP 200 dulu).
+#   2. IP asli VM — ini yang TERBUKTI bekerja: Brave 200, 38 kandidat.
+#      IP asli adalah IP mesin, bukan rentang datacenter Cloudflare WARP,
+#      jadi mesin pencari menerimanya.
+#   3. WARP hanya dinyalakan kalau diminta eksplisit via URLHUNT_USE_WARP=1,
+#      karena rentang IP WARP sudah diblokir mesin pencari (Brave 429).
+set -uo pipefail
 
 REPO="$HOME/x-scraper-no-api"
 PROFILE="$HOME/.xscraper/browser-profile"
@@ -51,11 +55,10 @@ cleanup_stale() {
 }
 cleanup_stale
 
-# 1. Muat kredensial proxy (kalau ada). Proxy residensial dipakai untuk
-# menembus blokir mesin pencari terhadap rentang IP WARP.
+# 1. Muat kredensial proxy (kalau ada).
 if [ -f "$HOME/.xscraper/proxy.env" ]; then
- # shellcheck disable=SC1091
- . "$HOME/.xscraper/proxy.env"
+  # shellcheck disable=SC1091
+  . "$HOME/.xscraper/proxy.env"
 fi
 
 # 2. Kalau proxy dikonfigurasi, cek dulu masih hidup.
@@ -69,15 +72,26 @@ if [ -n "${URLHUNT_PROXY:-}${WEBSHARE_PROXY:-}" ]; then
     https://api.ipify.org 2>/dev/null) || CODE="000"
   if [ "$CODE" != "200" ]; then
     echo "[urlhunt] PERINGATAN: proxy balas HTTP $CODE (bukan 200)." >&2
-    echo "[urlhunt] Kalau 402: kuota bandwidth proxy habis -> perbarui/tambah kuota." >&2
-    echo "[urlhunt] Melepas proxy, kembali ke WARP untuk run ini." >&2
+    echo "[urlhunt] Kalau 402: kuota bandwidth proxy habis." >&2
+    echo "[urlhunt] Lanjut tanpa proxy (pakai IP asli mesin)." >&2
     unset URLHUNT_PROXY WEBSHARE_PROXY
   fi
 fi
 
-# 3. WARP wajib (IP datacenter -> X 403). Dilewati kalau pakai proxy,
-# karena proxy sudah menggantikan peran WARP.
-if [ -z "${URLHUNT_PROXY:-}${WEBSHARE_PROXY:-}" ]; then
+# 3. WARP: MATIKAN kalau sedang aktif, kecuali diminta eksplisit.
+#
+# Rentang IP WARP Cloudflare diblokir mesin pencari (Brave 429, DDG 202).
+# IP asli mesin justru diterima (Brave 200). Jadi defaultnya tanpa WARP.
+if [ -z "${URLHUNT_USE_WARP:-}" ] && [ -z "${URLHUNT_PROXY:-}${WEBSHARE_PROXY:-}" ]; then
+  if warp-cli --accept-tos status 2>/dev/null | grep -q "Connected"; then
+    echo "[urlhunt] mematikan WARP (pakai IP asli mesin)…" >&2
+    warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+    sleep 3
+  fi
+fi
+
+# 4. Kalau diminta pakai WARP eksplisit, pastikan menyala.
+if [ -n "${URLHUNT_USE_WARP:-}" ] && [ -z "${URLHUNT_PROXY:-}${WEBSHARE_PROXY:-}" ]; then
   if ! warp-cli --accept-tos status 2>/dev/null | grep -q "Connected"; then
     echo "[urlhunt] menyalakan WARP…" >&2
     warp-cli --accept-tos mode warp >/dev/null 2>&1 || true
@@ -86,6 +100,6 @@ if [ -z "${URLHUNT_PROXY:-}${WEBSHARE_PROXY:-}" ]; then
   fi
 fi
 
-# 4. Chromium headful di Xvfb (headless -> body kosong)
+# 5. Chromium headful di Xvfb (headless -> body kosong)
 exec xvfb-run -a --server-args="-screen 0 1280x2000x24" \
   node "$REPO/src/urlhunt.js" "$@"
